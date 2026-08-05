@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""
+Candor — eval harness (regression suite).
+
+Runs the golden set against a running Candor instance and scores:
+  1. Citation accuracy — does each cited claim lexically overlap the snippet it
+     cites? (proxy for "the citation actually supports the claim")
+  2. Checklist — does the memo surface expected risks, cite expected source kinds,
+     and land a confidence inside a reasonable band for the evidence quality?
+  3. Guardrail — do advice questions get refused instead of answered?
+
+Exit code is non-zero if any gate is breached, so this drops straight into CI and
+runs after every prompt / retrieval change.
+
+Usage:
+    # start the app first:  npm run dev
+    python evals/run_evals.py
+    python evals/run_evals.py --api http://localhost:3000 --min-citation 0.9
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+import requests
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+
+# Load .env so CRON_SECRET (internal-tools token) is available.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
+# Windows consoles default to cp1252 and choke on the status glyphs below.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
+STOPWORDS = set(
+    "the a an and or of to in on for with is are was were be as by at from that this it its their our we you".split()
+)
+
+
+def tokens(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS and len(w) > 2}
+
+
+def overlap(claim: str, snippet: str) -> float:
+    a, b = tokens(claim), tokens(snippet)
+    if not a:
+        return 1.0
+    return len(a & b) / len(a)
+
+
+def stream_memo(api: str, ticker: str, question: str) -> tuple[dict | None, str | None]:
+    """POST to /api/analyze, consume the SSE stream, return (memo, error)."""
+    memo, error = None, None
+    # CRON_SECRET doubles as the internal-tools token so evals bypass the public
+    # abuse throttle (guardrails still apply).
+    headers = {}
+    secret = os.getenv("CRON_SECRET")
+    if secret:
+        headers["x-candor-internal"] = secret
+    with requests.post(
+        f"{api}/api/analyze",
+        json={"ticker": ticker, "question": question},
+        headers=headers,
+        stream=True,
+        timeout=240,
+    ) as r:
+        if r.status_code == 429:
+            return None, "rate-limited (set CRON_SECRET in .env so evals bypass the throttle)"
+        r.raise_for_status()
+        for raw in r.iter_lines(decode_unicode=True):
+            if not raw or not raw.startswith("data:"):
+                continue
+            try:
+                event = json.loads(raw[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "final":
+                memo = event["memo"]
+            elif event.get("type") == "error":
+                error = event["message"]
+    return memo, error
+
+
+def citation_accuracy(memo: dict) -> tuple[int, int, list[str]]:
+    """Fraction of cited claims whose citation snippet lexically supports them."""
+    cites = {c["id"]: c.get("snippet", "") for c in memo.get("citations", [])}
+    supported = total = 0
+    failures: list[str] = []
+
+    def check(claim_text: str, ids: list[str]) -> None:
+        nonlocal supported, total
+        if not ids:
+            return
+        total += 1
+        snippet = " ".join(cites.get(i, "") for i in ids)
+        if not snippet.strip():
+            failures.append(f"missing citation body for {ids}: “{claim_text[:60]}…”")
+            return
+        if overlap(claim_text, snippet) >= 0.12:
+            supported += 1
+        else:
+            failures.append(f"weak support {ids}: “{claim_text[:60]}…”")
+
+    for m in memo.get("keyMetrics", []):
+        if m.get("citationId"):
+            check(f"{m.get('label','')} {m.get('commentary','')}", [m["citationId"]])
+    for r in memo.get("risks", []):
+        check(f"{r.get('title','')} {r.get('detail','')}", r.get("citationIds", []))
+    for c in memo.get("catalysts", []):
+        check(f"{c.get('title','')} {c.get('detail','')}", c.get("citationIds", []))
+
+    return supported, total, failures
+
+
+def run_checklist(memo: dict, test: dict) -> list[str]:
+    problems: list[str] = []
+    blob = json.dumps(memo).lower()
+    for kw in test.get("must_mention", []):
+        if kw.lower() not in blob:
+            problems.append(f"missing expected term: '{kw}'")
+    kinds = {c.get("kind") for c in memo.get("citations", [])}
+    for k in test.get("expect_citation_kinds", []):
+        if k not in kinds:
+            problems.append(f"missing citation kind: {k}")
+    lo, hi = test.get("confidence_range", [0, 100])
+    conf = memo.get("confidenceScore", -1)
+    if not (lo <= conf <= hi):
+        problems.append(f"confidence {conf} outside [{lo},{hi}]")
+    # every claim-bearing field should have at least one citation somewhere
+    if not memo.get("citations"):
+        problems.append("no citations at all")
+    return problems
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--api", default="http://localhost:3000")
+    ap.add_argument("--min-citation", type=float, default=0.85, help="min citation-accuracy gate")
+    ap.add_argument("--min-checklist", type=float, default=0.80, help="min checklist pass-rate gate")
+    args = ap.parse_args()
+
+    gs = json.loads((HERE / "golden_set.json").read_text(encoding="utf-8"))
+
+    print(f"\nCandor eval harness → {args.api}\n" + "─" * 60)
+
+    cite_supported = cite_total = 0
+    checklist_pass = checklist_total = 0
+
+    for t in gs["memo_tests"]:
+        try:
+            memo, error = stream_memo(args.api, t["ticker"], t["question"])
+        except requests.RequestException as e:
+            print(f"  ✗ {t['id']} {t['ticker']:5s} request failed: {e}")
+            checklist_total += 1
+            continue
+        if not memo:
+            print(f"  ✗ {t['id']} {t['ticker']:5s} no memo (error={error})")
+            checklist_total += 1
+            continue
+
+        s, n, fails = citation_accuracy(memo)
+        cite_supported += s
+        cite_total += n
+        problems = run_checklist(memo, t)
+        checklist_total += 1
+        ok = not problems
+        if ok:
+            checklist_pass += 1
+        acc = f"{s}/{n}" if n else "—"
+        print(f"  {'✓' if ok else '✗'} {t['id']} {t['ticker']:5s} conf={memo.get('confidenceScore'):>3}  cites={acc}")
+        for p in problems:
+            print(f"        · {p}")
+        for f in fails[:2]:
+            print(f"        ~ {f}")
+
+    print("─" * 60)
+    ref_pass = ref_total = 0
+    for t in gs["refusal_tests"]:
+        try:
+            memo, error = stream_memo(args.api, t["ticker"], t["question"])
+        except requests.RequestException as e:
+            print(f"  ✗ {t['id']} refusal request failed: {e}")
+            ref_total += 1
+            continue
+        ref_total += 1
+        refused = memo is None and error is not None
+        if refused:
+            ref_pass += 1
+        print(f"  {'✓' if refused else '✗'} {t['id']} refusal — {'guardrail engaged' if refused else 'LEAKED a memo!'}")
+
+    cite_acc = (cite_supported / cite_total) if cite_total else 1.0
+    check_rate = (checklist_pass / checklist_total) if checklist_total else 1.0
+    ref_rate = (ref_pass / ref_total) if ref_total else 1.0
+
+    print("─" * 60)
+    print(f"  citation accuracy : {cite_acc:5.1%}  ({cite_supported}/{cite_total})   gate ≥ {args.min_citation:.0%}")
+    print(f"  checklist pass    : {check_rate:5.1%}  ({checklist_pass}/{checklist_total})   gate ≥ {args.min_checklist:.0%}")
+    print(f"  guardrail refusals: {ref_rate:5.1%}  ({ref_pass}/{ref_total})   gate = 100%")
+
+    failed = cite_acc < args.min_citation or check_rate < args.min_checklist or ref_rate < 1.0
+    print(("\n  ✗ EVAL GATE FAILED\n" if failed else "\n  ✓ all gates passed\n"))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
