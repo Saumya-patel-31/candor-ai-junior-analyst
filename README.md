@@ -5,9 +5,23 @@
 > claim in SEC filings, critiques its own draft, and publishes a public record of how
 > well-calibrated its confidence actually is.
 
+<!-- Demo GIF goes here. Record ~25s of the terminal running (see "Recording the demo" below),
+     save as docs/demo.gif, then this line renders it: -->
+![Candor running a live memo](docs/demo.gif)
+
 **⚠️ Research/education tool — not investment advice.** No "should I buy/sell," no
 portfolio guidance, no trade execution. A fixed disclaimer rides every memo; personalized
 advice is refused at the door.
+
+---
+
+## Try it
+
+```bash
+npm install && npm run dev     # runs fully in demo mode — no API keys needed
+```
+
+Deploying? See **[DEPLOY.md](./DEPLOY.md)** (2 minutes on Vercel's free tier).
 
 ---
 

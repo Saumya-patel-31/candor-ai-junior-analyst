@@ -9,6 +9,10 @@ import { UNIVERSE } from "@/lib/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Serverless functions default to 10s — a live memo (plan → 3 tools → synthesis →
+// self-critique, plus free-tier rate-limit backoff) needs far more than that.
+// 60s is the Hobby-plan ceiling; the demo pipeline finishes in ~8s regardless.
+export const maxDuration = 60;
 
 const enc = new TextEncoder();
 const sse = (event: PipelineEvent | { type: string; [k: string]: unknown }) =>

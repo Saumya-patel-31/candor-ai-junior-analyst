@@ -5,6 +5,8 @@ import { config } from "@/lib/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Resolving a batch of due memos makes several market-data calls.
+export const maxDuration = 60;
 
 /**
  * Outcome-resolution job. Hit on a schedule (Vercel Cron, GitHub Action, Supabase

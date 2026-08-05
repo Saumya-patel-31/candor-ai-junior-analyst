@@ -66,6 +66,20 @@ DEPTH (a thin memo is a failed memo — mine the evidence hard):
   Prefer a specific title like "China export-control exposure" over "Regulatory Risks".
 - catalysts: 2–4 entries, each with a horizon.
 - Titles must be specific and self-explanatory. Reuse the filings' own vocabulary.
+
+CITATION DISCIPLINE (this is what makes the memo trustworthy — get it exactly right):
+- Match the source to the CLAIM TYPE:
+  · a NUMBER or ratio → cite the XBRL/fundamentals id
+  · a RISK, competitive dynamic, or business driver → cite a FILING chunk id
+  · a recent event or market framing → cite a news id
+- NEVER cite the XBRL/fundamentals source for a narrative claim. It contains figures
+  only, so it cannot support a sentence like "X's ability to innovate is key".
+- If filing chunks are present in the evidence, EVERY risk must cite at least one of
+  them. Fall back to news only when no filing chunk speaks to that risk.
+- Each claim's wording must be traceable to its cited snippet — reuse the source's own
+  terms. If you cannot phrase it from the source, drop the claim.
+- The filings enumerate competition, regulatory, supply, and macro risks explicitly.
+  Surface those named risks rather than inventing generic categories.
 ${COMPLIANCE_CLAUSE}
 
 ${JSON_RULES}
