@@ -85,9 +85,11 @@ export default async function TrackRecordPage() {
                 <h3 className="font-display text-lg font-semibold text-fg">Calibration over time</h3>
                 <p className="mt-1 text-sm text-fg-muted">ECE (solid) and Brier (dashed) as the eval harness tightened prompts + retrieval.</p>
               </div>
-              <Badge tone="bull" className="shrink-0">
-                <TrendingDown className="h-3 w-3" /> improving
-              </Badge>
+              {s.trend.length >= 2 && s.trend[s.trend.length - 1].ece < s.trend[0].ece && (
+                <Badge tone="bull" className="shrink-0">
+                  <TrendingDown className="h-3 w-3" /> improving
+                </Badge>
+              )}
             </div>
             <div className="mt-6">
               <TrendChart data={s.trend} />

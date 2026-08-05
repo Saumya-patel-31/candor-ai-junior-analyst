@@ -20,6 +20,25 @@ export function ReliabilityDiagram({
   const X = (v: number) => pad + v * plot;
   const Y = (v: number) => pad + (1 - v) * plot;
 
+  // Before any memo resolves there is nothing to plot — say so rather than
+  // drawing an empty grid that looks broken.
+  if (!bins.length) {
+    return (
+      <div
+        style={{ height: size, maxWidth: 420 }}
+        className="flex w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line/70 px-6 text-center"
+      >
+        <span className="font-mono text-2xs uppercase tracking-[0.16em] text-fg-muted">
+          no resolved memos yet
+        </span>
+        <span className="max-w-xs text-xs leading-relaxed text-fg-faint">
+          Each memo is scored against its stated horizon. Once the first batch resolves, the
+          reliability curve is plotted against the perfect-calibration diagonal.
+        </span>
+      </div>
+    );
+  }
+
   const sorted = [...bins].sort((a, b) => a.predicted - b.predicted);
   const curve = sorted.map((b) => `${X(b.predicted)},${Y(b.observed)}`).join(" ");
   const areaPts =

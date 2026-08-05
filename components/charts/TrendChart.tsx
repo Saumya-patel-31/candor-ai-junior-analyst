@@ -15,9 +15,28 @@ export function TrendChart({ data, height = 200 }: { data: Point[]; height?: num
   const iw = width - pad.l - pad.r;
   const ih = height - pad.t - pad.b;
 
-  const all = data.flatMap((d) => [d.ece, d.brier]);
-  const min = Math.min(...all) * 0.85;
-  const max = Math.max(...all) * 1.08;
+  // A trend needs at least two points. Before any memo reaches its horizon the
+  // series is empty — render an honest empty state instead of NaN geometry.
+  if (data.length < 2) {
+    return (
+      <div className="flex h-[200px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-line/70 text-center">
+        <span className="font-mono text-2xs uppercase tracking-[0.16em] text-fg-muted">
+          awaiting resolved memos
+        </span>
+        <span className="max-w-xs text-xs leading-relaxed text-fg-faint">
+          Calibration is scored once a memo reaches its horizon. The trend appears after the
+          second scoring window.
+        </span>
+      </div>
+    );
+  }
+
+  const all = data.flatMap((d) => [d.ece, d.brier]).filter((n) => Number.isFinite(n));
+  const lo = all.length ? Math.min(...all) : 0;
+  const hi = all.length ? Math.max(...all) : 1;
+  const min = lo * 0.85;
+  // Guard a flat series (max === min) so the Y scale never divides by zero.
+  const max = hi * 1.08 > min ? hi * 1.08 : min + 1;
   const X = (i: number) => pad.l + (i / (data.length - 1)) * iw;
   const Y = (v: number) => pad.t + (1 - (v - min) / (max - min)) * ih;
 
