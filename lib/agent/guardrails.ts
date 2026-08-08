@@ -178,7 +178,27 @@ export function verifyCitationSupport(draft: MemoDraft): {
         return true;
       });
 
-  return { draft: { ...draft, risks: check(draft.risks), catalysts: check(draft.catalysts) }, dropped, reattached };
+  // Metrics carry a single citation. A figure is only traceable if its source
+  // actually mentions it, so an unsupported citationId is re-pointed at the
+  // source that does support it, or cleared rather than shown as provenance.
+  const keyMetrics = draft.keyMetrics.map((m) => {
+    if (!m.citationId) return m;
+    const claim = `${m.label} ${m.value} ${m.commentary ?? ""}`;
+    const cited = byId.get(m.citationId);
+    if (cited && supportScore(claim, `${cited.title} ${cited.snippet}`) >= SUPPORT_THRESHOLD) return m;
+    const best = bestCitationFor(claim, draft.citations);
+    if (best && best.score >= SUPPORT_THRESHOLD) {
+      if (best.id !== m.citationId) reattached += 1;
+      return { ...m, citationId: best.id };
+    }
+    return { ...m, citationId: undefined };
+  });
+
+  return {
+    draft: { ...draft, keyMetrics, risks: check(draft.risks), catalysts: check(draft.catalysts) },
+    dropped,
+    reattached,
+  };
 }
 
 /** Turn a draft + critique into the final, guardrailed, publishable memo. */

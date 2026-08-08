@@ -89,8 +89,10 @@ Respond with ONLY JSON matching this schema:
   "confidenceScore": number, "confidenceRationale": string,
   "keyMetrics": [{ "label": string, "value": string, "raw"?: number, "delta"?: number, "trend"?: "up"|"down"|"flat", "commentary"?: string, "citationId"?: string }],
   "risks": [{ "id": string, "title": string, "detail": string, "severity": "low"|"medium"|"high", "citationIds": string[] }],
-  "catalysts": [{ "id": string, "title": string, "detail": string, "likelihood": "low"|"medium"|"high", "horizon"?: string, "citationIds": string[] }],
-  "citations": [{ "id": string, "kind": "10-K"|"10-Q"|"XBRL"|"news"|"market", "title": string, "snippet": string, "url"?: string, "locator"?: string, "filedAt"?: string }] }`;
+  "catalysts": [{ "id": string, "title": string, "detail": string, "likelihood": "low"|"medium"|"high", "horizon"?: string, "citationIds": string[] }] }
+
+Do NOT output a "citations" array. Source metadata is attached automatically from the
+retrieved evidence — you only reference the ids that already exist in the bundle.`;
 
 export const CRITIC_SYSTEM = `You are the SELF-CRITIC for Candor. You receive a DRAFT memo and the SAME evidence
 bundle the synthesizer had. Adversarially re-read the draft against the evidence ONLY.

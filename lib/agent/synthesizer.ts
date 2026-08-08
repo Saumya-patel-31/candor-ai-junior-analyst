@@ -40,8 +40,20 @@ export async function synthesize(
     system: SYNTH_SYSTEM,
     user: `Ticker: ${ticker}\nQuestion: ${question}\n\n${bundle}\n\nWrite the memo as JSON. Every claim must cite an available citation id.`,
     schema: MemoDraftSchema,
-    maxTokens: 4096,
+    // A full memo (6 metrics + 5 risks + 4 catalysts) overruns 4k on verbose
+    // models, truncating the JSON mid-array.
+    maxTokens: 8192,
     temperature: 0.5,
   });
-  return { draft: data, usage };
+
+  // The retrieved citations are authoritative — we already have their exact ids,
+  // titles and snippets from the tools. Asking the model to echo that metadata back
+  // is a needless failure mode (some models return an empty `citations` array, which
+  // then strips every claim as "uncited"). The model's only job is to reference ids;
+  // provenance is filled in server-side from the real evidence.
+  const retrieved = results.flatMap((r) => r.citations);
+  const seen = new Set(retrieved.map((c) => c.id));
+  const citations = [...retrieved, ...data.citations.filter((c) => !seen.has(c.id))];
+
+  return { draft: { ...data, citations }, usage };
 }

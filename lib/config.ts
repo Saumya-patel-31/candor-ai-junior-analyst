@@ -35,8 +35,10 @@ const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
     label: "Cerebras",
     baseURL: "https://api.cerebras.ai/v1",
     keyEnv: "CEREBRAS_API_KEY",
-    planner: "llama3.1-8b",
-    synth: "llama-3.3-70b",
+    // Verified against GET /v1/models — Cerebras rotates its catalogue, so check
+    // there first if you get a 404 ("model does not exist").
+    planner: "gemma-4-31b",
+    synth: "gpt-oss-120b",
     openaiCompatible: true,
     signupHint: "Free key (1M tokens/day, no card): cloud.cerebras.ai",
   },
@@ -44,6 +46,10 @@ const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
     label: "Groq",
     baseURL: "https://api.groq.com/openai/v1",
     keyEnv: "GROQ_API_KEY",
+    // 8b-instant has the highest request budget (~14.4k/day) → planning.
+    // llama-3.3-70b-versatile is the only free model verified to hold the forced-JSON
+    // contract end-to-end here. Reasoning-style models (nemotron, gpt-oss) spend their
+    // output budget on chain-of-thought and return truncated or absent JSON.
     planner: "llama-3.1-8b-instant",
     synth: "llama-3.3-70b-versatile",
     openaiCompatible: true,
@@ -53,7 +59,8 @@ const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
     label: "Gemini",
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     keyEnv: "GEMINI_API_KEY",
-    planner: "gemini-2.5-flash-lite",
+    // flash-lite was retired — both tiers use flash.
+    planner: "gemini-2.5-flash",
     synth: "gemini-2.5-flash",
     openaiCompatible: true,
     signupHint: "Free key: aistudio.google.com/apikey",
@@ -62,8 +69,10 @@ const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
     label: "OpenRouter",
     baseURL: "https://openrouter.ai/api/v1",
     keyEnv: "OPENROUTER_API_KEY",
-    planner: "meta-llama/llama-3.1-8b-instruct:free",
-    synth: "meta-llama/llama-3.3-70b-instruct:free",
+    // ":free" slugs are withdrawn without notice — verify against
+    // GET https://openrouter.ai/api/v1/models if you see a 404.
+    planner: "nvidia/nemotron-nano-9b-v2:free",
+    synth: "nvidia/nemotron-3-super-120b-a12b:free",
     openaiCompatible: true,
     signupHint: "Free key: openrouter.ai/keys (pick any :free model)",
   },
@@ -178,9 +187,11 @@ export const config = {
   // tier your ACTUAL marginal cost is $0 — this powers a "what it would cost at scale"
   // estimate so the model-routing story survives. Unknown models fall back to `default`.
   pricing: {
-    "llama3.1-8b": { in: 0.1, out: 0.1 },
-    "llama-3.3-70b": { in: 0.85, out: 1.2 },
+    "gemma-4-31b": { in: 0.1, out: 0.1 },
+    "gpt-oss-120b": { in: 0.35, out: 0.75 },
+    "zai-glm-4.7": { in: 0.5, out: 0.9 },
     "llama-3.1-8b-instant": { in: 0.05, out: 0.08 },
+    "openai/gpt-oss-120b": { in: 0.15, out: 0.6 },
     "llama-3.3-70b-versatile": { in: 0.59, out: 0.79 },
     "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },
     "gemini-2.5-flash": { in: 0.3, out: 2.5 },
