@@ -130,7 +130,9 @@ async function openAICompatibleChat(opts: {
   const chain = providerChain();
   if (!chain.length) throw new Error("No LLM provider configured. Set CEREBRAS_API_KEY or GROQ_API_KEY.");
 
-  let lastErr: Error | null = null;
+  // Collect EVERY provider's failure. Reporting only the last one hides which
+  // provider actually broke and why — useless when several are chained.
+  const failures: string[] = [];
   for (const p of chain) {
     // Each provider names its models differently — use its own tier mapping,
     // unless the caller pinned an explicit model via env override.
@@ -139,14 +141,13 @@ async function openAICompatibleChat(opts: {
       const r = await chatOnProvider(p, { ...opts, model });
       return { ...r, model, provider: p.name };
     } catch (e) {
-      lastErr = e as Error;
-      const reason = e instanceof QuotaExhausted ? "quota exhausted" : "failed";
-      if (chain.indexOf(p) < chain.length - 1) {
-        console.warn(`[candor] ${p.label} ${reason}; falling back to ${chain[chain.indexOf(p) + 1].label}`);
-      }
+      const reason = e instanceof QuotaExhausted ? "quota" : "error";
+      const detail = (e as Error).message.replace(/\s+/g, " ").slice(0, 150);
+      failures.push(`${p.label}[${model}] ${reason}: ${detail}`);
+      console.warn(`[candor] ${p.label} (${model}) ${reason} — ${detail}`);
     }
   }
-  throw lastErr ?? new Error("All providers failed");
+  throw new Error(`All ${chain.length} provider(s) failed → ${failures.join(" | ")}`);
 }
 
 /**

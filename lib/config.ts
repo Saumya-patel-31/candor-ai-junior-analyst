@@ -71,8 +71,11 @@ const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
     keyEnv: "OPENROUTER_API_KEY",
     // ":free" slugs are withdrawn without notice — verify against
     // GET https://openrouter.ai/api/v1/models if you see a 404.
-    planner: "nvidia/nemotron-nano-9b-v2:free",
-    synth: "nvidia/nemotron-3-super-120b-a12b:free",
+    // Use INSTRUCTION-TUNED models here. Reasoning models (nemotron, gpt-oss)
+    // spend their output budget on chain-of-thought and return truncated or
+    // absent JSON, which is useless for a forced-schema contract.
+    planner: "google/gemma-4-26b-a4b-it:free",
+    synth: "google/gemma-4-31b-it:free",
     openaiCompatible: true,
     signupHint: "Free key: openrouter.ai/keys (pick any :free model)",
   },
