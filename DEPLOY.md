@@ -15,30 +15,42 @@ Vercel auto-detects Next.js. Leave build settings at their defaults.
 Add these in the import screen (or later under *Settings → Environment Variables*).
 Copy the values from your local `.env` — **never commit that file**.
 
-### Minimum for a working public demo
+### Option A — zero config (bundled dataset)
 
-| Variable | Value | Why |
-|---|---|---|
-| `CANDOR_MODE` | `demo` | Scripted pipeline: ~8s, deterministic, no API spend. **Recommended for the public URL.** |
+| Variable | Value |
+|---|---|
+| `CANDOR_MODE` | `demo` |
 
-That alone deploys a fully working site — the terminal animation, memos, dashboard, and
-track record all run on the bundled dataset. Nothing else is required.
+Deploys a fully working site — terminal animation, memos, dashboard, track record — with
+no keys and no spend. Good if you just want the link up today.
 
-### To run the live agent in production
+### Option B — a real agent visitors can actually use (recommended)
+
+Free, no key entry for visitors, and it survives real traffic:
 
 | Variable | Notes |
 |---|---|
 | `CANDOR_MODE` | `live` |
-| `CANDOR_LLM_PROVIDER` | `groq` |
-| `GROQ_API_KEY` | free key |
+| `CANDOR_LLM_PROVIDER` | `cerebras` |
+| `CEREBRAS_API_KEY` | free, **1M tokens/day**, no card — [cloud.cerebras.ai](https://cloud.cerebras.ai) |
+| `GROQ_API_KEY` | free — automatic fallback when Cerebras' daily cap hits |
+| `GEMINI_API_KEY` | free — second fallback, and powers embeddings |
 | `SEC_USER_AGENT` | must contain a real contact email (SEC fair-access) |
 | `FINNHUB_API_KEY` | news tool |
 | `CANDOR_DAILY_QUERY_CAP` | e.g. `25` — per-IP abuse cap |
+| `CANDOR_CACHE_TTL_HOURS` | e.g. `12` — how long a memo is reused |
 
-⚠️ **Live mode on a public URL is slower and rate-limit bound.** A memo takes ~30–60s on
-Groq's free tier (12k tokens/min), and `maxDuration` is capped at 60s on Vercel Hobby, so
-a heavy run can be cut off. Demo mode is the safer default for a portfolio link; keep live
-mode for local runs and screenshots.
+Then warm the cache once so the first visitor to each ticker gets an instant answer:
+
+```bash
+python evals/precompute.py --api https://<your-app>.vercel.app
+```
+
+**Why this holds up:** cached memos cost nothing and return in ~4s, so the daily model
+budget is spent only on genuinely new questions; when one provider's cap is reached the
+agent transparently continues on the next; and if everything is exhausted it degrades to
+the demo dataset rather than erroring. `maxDuration` is 60s (the Vercel Hobby ceiling),
+which comfortably covers a cached replay and a normal live run.
 
 ### Optional — filing RAG, persistence, calibration
 

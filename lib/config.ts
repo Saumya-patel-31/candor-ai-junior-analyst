@@ -11,7 +11,7 @@
  */
 
 export type RunMode = "demo" | "live";
-export type LlmProvider = "groq" | "gemini" | "openrouter" | "ollama";
+export type LlmProvider = "cerebras" | "groq" | "gemini" | "openrouter" | "ollama";
 
 function env(key: string, fallback = ""): string {
   // Treat empty/whitespace values the same as unset, so blank .env lines
@@ -31,6 +31,15 @@ interface ProviderSpec {
 }
 
 const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
+  cerebras: {
+    label: "Cerebras",
+    baseURL: "https://api.cerebras.ai/v1",
+    keyEnv: "CEREBRAS_API_KEY",
+    planner: "llama3.1-8b",
+    synth: "llama-3.3-70b",
+    openaiCompatible: true,
+    signupHint: "Free key (1M tokens/day, no card): cloud.cerebras.ai",
+  },
   groq: {
     label: "Groq",
     baseURL: "https://api.groq.com/openai/v1",
@@ -70,13 +79,53 @@ const PROVIDERS: Record<LlmProvider, ProviderSpec> = {
 };
 
 function activeProvider(): LlmProvider {
-  const p = env("CANDOR_LLM_PROVIDER", "groq") as LlmProvider;
-  return p in PROVIDERS ? p : "groq";
+  const p = env("CANDOR_LLM_PROVIDER", "cerebras") as LlmProvider;
+  return p in PROVIDERS ? p : "cerebras";
 }
 
 function providerConfigured(p: LlmProvider): boolean {
   const spec = PROVIDERS[p];
   return spec.keyEnv === "" ? true : env(spec.keyEnv).length > 0;
+}
+
+/** Runtime view of one provider, used by the failover chain. */
+export interface ProviderRuntime {
+  name: LlmProvider;
+  label: string;
+  baseURL: string;
+  apiKey: string;
+  planner: string;
+  synth: string;
+  signupHint: string;
+}
+
+function runtimeFor(p: LlmProvider): ProviderRuntime {
+  const s = PROVIDERS[p];
+  return {
+    name: p,
+    label: s.label,
+    baseURL: s.baseURL.replace(/\/$/, ""),
+    apiKey: s.keyEnv ? env(s.keyEnv) : "",
+    planner: s.planner,
+    synth: s.synth,
+    signupHint: s.signupHint,
+  };
+}
+
+/**
+ * Ordered list of configured providers: the primary first, then every other
+ * provider that has a key. Free tiers have hard daily caps, so when one is
+ * exhausted the agent transparently continues on the next instead of failing.
+ * Combined free budget across Cerebras + Groq + Gemini is >1M tokens/day.
+ */
+export function providerChain(): ProviderRuntime[] {
+  const primary = activeProvider();
+  // Auto-fallback only to providers with stable free tiers. OpenRouter's ":free"
+  // slugs are withdrawn without notice (and it allows just 50 req/day), and Ollama
+  // is local-only — both are usable, but only when chosen explicitly as primary.
+  const AUTO_FALLBACK: LlmProvider[] = ["cerebras", "groq", "gemini"];
+  const order: LlmProvider[] = [primary, ...AUTO_FALLBACK.filter((p) => p !== primary)];
+  return order.filter(providerConfigured).map(runtimeFor);
 }
 
 /**
@@ -107,6 +156,9 @@ export const config = {
     signupHint: spec.signupHint,
   },
 
+  // Display/default names for the PRIMARY provider (used by the dashboard and the
+  // demo dataset). At call time the agent passes `modelOverrides` instead, so each
+  // provider in the failover chain can use its own model naming.
   models: {
     // Cheap + frequent → planning / routing.
     planner: env("CANDOR_MODEL_PLANNER", spec.planner),
@@ -115,10 +167,19 @@ export const config = {
     critic: env("CANDOR_MODEL_CRITIC", spec.synth),
   },
 
+  /** Only set when explicitly pinned via env; "" means "let the provider choose". */
+  modelOverrides: {
+    planner: env("CANDOR_MODEL_PLANNER"),
+    synth: env("CANDOR_MODEL_SYNTH"),
+    critic: env("CANDOR_MODEL_CRITIC"),
+  },
+
   // REFERENCE pricing (USD / 1M tokens) at each provider's list rates. On the free
   // tier your ACTUAL marginal cost is $0 — this powers a "what it would cost at scale"
   // estimate so the model-routing story survives. Unknown models fall back to `default`.
   pricing: {
+    "llama3.1-8b": { in: 0.1, out: 0.1 },
+    "llama-3.3-70b": { in: 0.85, out: 1.2 },
     "llama-3.1-8b-instant": { in: 0.05, out: 0.08 },
     "llama-3.3-70b-versatile": { in: 0.59, out: 0.79 },
     "gemini-2.5-flash-lite": { in: 0.1, out: 0.4 },

@@ -14,7 +14,8 @@ export async function critique(
     .join("\n");
 
   const { data, usage } = await callJSON({
-    model: config.models.critic,
+    model: config.modelOverrides.critic,
+    tier: "synth",
     system: CRITIC_SYSTEM,
     user: `DRAFT MEMO (JSON):\n${JSON.stringify(draft, null, 2)}\n\nEVIDENCE CITATIONS AVAILABLE:\n${citationIndex}\n\nAdversarially critique the draft against this evidence only. Respond as JSON.`,
     schema: CritiqueSchema,

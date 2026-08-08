@@ -114,6 +114,36 @@ no key) and drop in that provider's key. Model tiers auto-select per provider.
 > The tools (fundamentals, news, RAG, sentiment) degrade gracefully — the agent runs live with
 > just a Groq key and simply uses fewer sources until you add the rest.
 
+## Running it for real users (free)
+
+A public deployment can't ask visitors for an API key, and no single free tier
+survives real traffic. Three mechanisms make it work at zero cost:
+
+**1. Memo cache — the main lever.** Visitors overwhelmingly click the same tickers, and
+a 10-K doesn't change between two clicks. A recent stored memo is replayed through the
+same event stream (identical animation) in **~4s at $0**, versus ~30s and ~6k tokens to
+regenerate. Warm it for the whole universe with:
+
+```bash
+python evals/precompute.py            # one memo per covered ticker, cached
+```
+
+**2. Provider failover.** Every provider you add a key for becomes an automatic fallback
+when the one above it hits its daily cap. The agent switches mid-run rather than failing:
+
+| Provider | Free daily budget |
+|---|---|
+| Cerebras (recommended primary) | **~1M tokens/day**, no card |
+| Groq | 100k/day on 70B (500k on 8B), fastest |
+| Gemini | ~250 requests/day, plus free embeddings |
+
+Together that's comfortably over a million tokens a day — and with caching, most requests
+never spend any of it.
+
+**3. Caps and a kill switch.** Per-IP daily cap, a global cap, a concurrency cooldown, and
+`CANDOR_KILL_SWITCH=true` to stop all model spend instantly. If everything is exhausted the
+app degrades to the bundled demo dataset rather than erroring.
+
 ## Accuracy engineering
 
 Financial data is easy to get subtly, badly wrong. The safeguards here are the point:

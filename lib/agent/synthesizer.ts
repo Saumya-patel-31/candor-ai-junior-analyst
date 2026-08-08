@@ -35,7 +35,8 @@ export async function synthesize(
 ): Promise<{ draft: MemoDraft; usage: CallUsage }> {
   const bundle = buildEvidenceBundle(results);
   const { data, usage } = await callJSON({
-    model: config.models.synth,
+    model: config.modelOverrides.synth,
+    tier: "synth",
     system: SYNTH_SYSTEM,
     user: `Ticker: ${ticker}\nQuestion: ${question}\n\n${bundle}\n\nWrite the memo as JSON. Every claim must cite an available citation id.`,
     schema: MemoDraftSchema,

@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { config, tokenCost } from "@/lib/config";
+import { providerChain, tokenCost, type ProviderRuntime } from "@/lib/config";
+
+const PROVIDERS_HINT =
+  "Set CEREBRAS_API_KEY (1M tokens/day free, cloud.cerebras.ai), GROQ_API_KEY, or GEMINI_API_KEY.";
 
 /**
  * Provider-agnostic LLM client. Talks to ANY OpenAI-compatible endpoint
@@ -43,22 +46,26 @@ function retryDelayMs(res: Response, body: string): number {
   return 8000;
 }
 
-async function openAICompatibleChat(opts: {
-  model: string;
-  system: string;
-  user: string;
-  maxTokens: number;
-  temperature: number;
-}): Promise<{ text: string; tokensIn: number; tokensOut: number }> {
-  const MAX_ATTEMPTS = 4;
+/** A daily/quota exhaustion should switch providers, not sit in a retry loop. */
+function isQuotaExhausted(status: number, body: string): boolean {
+  if (status !== 429) return false;
+  return /per day|daily|TPD|RPD|quota|exhausted|insufficient/i.test(body);
+}
+
+/** One provider attempt, with short-wait retries for transient/per-minute limits. */
+async function chatOnProvider(
+  p: ProviderRuntime,
+  opts: { model: string; system: string; user: string; maxTokens: number; temperature: number },
+): Promise<{ text: string; tokensIn: number; tokensOut: number }> {
+  const MAX_ATTEMPTS = 3;
   let lastErr = "";
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const res = await fetch(`${config.llm.baseURL}/chat/completions`, {
+    const res = await fetch(`${p.baseURL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(config.llm.apiKey ? { Authorization: `Bearer ${config.llm.apiKey}` } : {}),
+        ...(p.apiKey ? { Authorization: `Bearer ${p.apiKey}` } : {}),
         // OpenRouter courtesy headers (ignored elsewhere).
         "HTTP-Referer": "https://candor.local",
         "X-Title": "Candor AI Junior Analyst",
@@ -87,18 +94,59 @@ async function openAICompatibleChat(opts: {
     }
 
     const body = await res.text().catch(() => "");
-    lastErr = `${config.llm.label} ${res.status}: ${body.slice(0, 300)}`;
+    lastErr = `${p.label} ${res.status}: ${body.slice(0, 240)}`;
 
-    // 429 = rate limited, 5xx = transient. Both are worth waiting out.
+    // Daily budget gone — no point waiting, hand off to the next provider.
+    if (isQuotaExhausted(res.status, body)) throw new QuotaExhausted(lastErr);
+
     const retryable = res.status === 429 || res.status >= 500;
     if (!retryable || attempt === MAX_ATTEMPTS) break;
 
     const waitMs = res.status === 429 ? retryDelayMs(res, body) + 500 : 1000 * attempt;
-    console.warn(`[candor] ${res.status} from ${config.llm.label}; retrying in ${waitMs}ms (attempt ${attempt}/${MAX_ATTEMPTS})`);
-    await sleep(Math.min(waitMs, 30_000));
+    // Long per-minute waits are also better spent on another provider.
+    if (waitMs > 20_000) throw new QuotaExhausted(lastErr);
+    console.warn(`[candor] ${res.status} from ${p.label}; retry in ${waitMs}ms (${attempt}/${MAX_ATTEMPTS})`);
+    await sleep(waitMs);
   }
 
   throw new Error(lastErr);
+}
+
+class QuotaExhausted extends Error {}
+
+/**
+ * Try each configured provider in turn. Free tiers have hard daily caps, so the
+ * agent keeps working by moving down the chain (Cerebras → Groq → Gemini → …)
+ * rather than failing the request.
+ */
+async function openAICompatibleChat(opts: {
+  model: string;
+  system: string;
+  user: string;
+  maxTokens: number;
+  temperature: number;
+  tier: "planner" | "synth";
+}): Promise<{ text: string; tokensIn: number; tokensOut: number; model: string; provider: string }> {
+  const chain = providerChain();
+  if (!chain.length) throw new Error("No LLM provider configured. Set CEREBRAS_API_KEY or GROQ_API_KEY.");
+
+  let lastErr: Error | null = null;
+  for (const p of chain) {
+    // Each provider names its models differently — use its own tier mapping,
+    // unless the caller pinned an explicit model via env override.
+    const model = opts.model || (opts.tier === "planner" ? p.planner : p.synth);
+    try {
+      const r = await chatOnProvider(p, { ...opts, model });
+      return { ...r, model, provider: p.name };
+    } catch (e) {
+      lastErr = e as Error;
+      const reason = e instanceof QuotaExhausted ? "quota exhausted" : "failed";
+      if (chain.indexOf(p) < chain.length - 1) {
+        console.warn(`[candor] ${p.label} ${reason}; falling back to ${chain[chain.indexOf(p) + 1].label}`);
+      }
+    }
+  }
+  throw lastErr ?? new Error("All providers failed");
 }
 
 /**
@@ -112,18 +160,21 @@ export async function callJSON<S extends z.ZodTypeAny>(opts: {
   schema: S;
   maxTokens?: number;
   temperature?: number;
+  tier?: "planner" | "synth";
 }): Promise<{ data: z.infer<S>; usage: CallUsage }> {
-  if (!config.llm.configured) {
+  if (!providerChain().length) {
     throw new Error(
-      `LLM provider "${config.llm.provider}" is not configured. ${config.llm.signupHint}`,
+      `No LLM provider configured. ${PROVIDERS_HINT}`,
     );
   }
   const started = Date.now();
   const maxTokens = opts.maxTokens ?? 4096;
   const temperature = opts.temperature ?? 0.4;
+  const tier = opts.tier ?? "synth";
 
   let tokensIn = 0;
   let tokensOut = 0;
+  let servedModel = opts.model;
   const call = async (user: string, temp: number) => {
     const r = await openAICompatibleChat({
       model: opts.model,
@@ -131,9 +182,11 @@ export async function callJSON<S extends z.ZodTypeAny>(opts: {
       user,
       maxTokens,
       temperature: temp,
+      tier,
     });
     tokensIn += r.tokensIn;
     tokensOut += r.tokensOut;
+    servedModel = r.model;
     return r.text;
   };
 
@@ -164,6 +217,6 @@ Return the CORRECTED object as raw JSON only. Rules: omit optional fields entire
   const latencyMs = Date.now() - started;
   return {
     data,
-    usage: { model: opts.model, tokensIn, tokensOut, costUsd: tokenCost(opts.model, tokensIn, tokensOut), latencyMs },
+    usage: { model: servedModel, tokensIn, tokensOut, costUsd: tokenCost(servedModel, tokensIn, tokensOut), latencyMs },
   };
 }

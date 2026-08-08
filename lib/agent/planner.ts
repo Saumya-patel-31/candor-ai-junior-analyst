@@ -19,7 +19,8 @@ const PlanSchema = z.object({
 
 export async function plan(ticker: string, question: string): Promise<{ plan: Plan; usage: CallUsage }> {
   const { data, usage } = await callJSON({
-    model: config.models.planner,
+    model: config.modelOverrides.planner,
+    tier: "planner",
     system: PLANNER_SYSTEM,
     user: `Ticker: ${ticker}\nQuestion: ${question}\n\nProduce the tool plan as JSON.`,
     schema: PlanSchema,

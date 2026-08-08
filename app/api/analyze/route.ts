@@ -5,6 +5,7 @@ import { streamDemoPipeline } from "@/lib/demo/pipeline";
 import { runLivePipeline } from "@/lib/agent/orchestrator";
 import { checkQuestionAllowed } from "@/lib/agent/guardrails";
 import { checkRateLimit, clientKey } from "@/lib/ratelimit";
+import { getCachedMemo, streamCachedMemo } from "@/lib/agent/cache";
 import { UNIVERSE } from "@/lib/config";
 
 export const runtime = "nodejs";
@@ -28,6 +29,8 @@ export async function POST(req: NextRequest) {
 
   const ticker = String(body.ticker ?? "").toUpperCase().replace(/[^A-Z.]/g, "").slice(0, 6);
   const question = String(body.question ?? `Research memo on ${ticker}.`).slice(0, 300);
+  // Internal callers (evals, precompute) can force a fresh generation.
+  const noCache = new URL(req.url).searchParams.get("fresh") === "1";
 
   if (!ticker) return new Response("Missing ticker", { status: 400 });
 
@@ -77,6 +80,17 @@ export async function POST(req: NextRequest) {
         }
 
         send({ type: "status", phase: "planning", message: `mode=${mode} · killSwitch=${config.killSwitch}`, ts: Date.now() } as PipelineEvent);
+
+        // Serve a recent stored memo when one exists: instant, and it spends no
+        // model budget — this is what keeps a public deployment usable on free tiers.
+        if (mode === "live" && !noCache) {
+          const cached = await getCachedMemo(ticker, question);
+          if (cached) {
+            for await (const event of streamCachedMemo(cached)) send(event);
+            controller.close();
+            return;
+          }
+        }
 
         const gen = mode === "live" ? runLivePipeline(ticker, question) : streamDemoPipeline(ticker, question);
         for await (const event of gen) {
