@@ -72,10 +72,12 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       const send = (e: PipelineEvent | { type: string; [k: string]: unknown }) => controller.enqueue(sse(e));
       try {
+        // NOTE: never call controller.close() here — `finally` owns closing the
+        // stream. Closing twice throws ERR_INVALID_STATE and turns the response
+        // into a 500 with no SSE body (which silently broke every refusal).
         if (!gate.allowed) {
           send({ type: "error", message: gate.reason!, ts: Date.now() });
           send({ type: "done", ts: Date.now() });
-          controller.close();
           return;
         }
 
@@ -87,7 +89,6 @@ export async function POST(req: NextRequest) {
           const cached = await getCachedMemo(ticker, question);
           if (cached) {
             for await (const event of streamCachedMemo(cached)) send(event);
-            controller.close();
             return;
           }
         }

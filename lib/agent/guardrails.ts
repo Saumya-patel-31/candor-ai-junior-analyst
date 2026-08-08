@@ -1,6 +1,6 @@
 import { DISCLAIMER, UNIVERSE } from "@/lib/config";
 import { clamp } from "@/lib/utils";
-import type { Critique, MemoDraft, Memo, CostTotals, ToolCallRecord } from "@/lib/types";
+import type { Citation, Critique, MemoDraft, Memo, CostTotals, ToolCallRecord } from "@/lib/types";
 
 /** Phrases that would turn research into personalized advice. */
 const ADVICE_PATTERNS: { re: RegExp; replace: string }[] = [
@@ -101,6 +101,86 @@ export function enforceCitationIntegrity(draft: MemoDraft): {
   return { draft: { ...draft, risks, catalysts, keyMetrics }, droppedClaims: dropped, strippedRefs: stripped };
 }
 
+/* ── Citation support verification ────────────────────────────────────────
+   Integrity says the citation EXISTS. Support says it actually backs the claim.
+   Models paraphrase away from their source, so we check lexical grounding: if a
+   claim doesn't overlap its cited snippet, try to re-attach it to a citation that
+   does, and drop it when nothing supports it. This enforces the product's core
+   promise rather than trusting the model to have honoured it. */
+
+const STOPWORDS = new Set(
+  ("the a an and or of to in on for with is are was were be as by at from that this it its their our we you " +
+    "has have had will would could may might can not no more most other such which than then these those").split(" "),
+);
+
+function contentTokens(text: string): Set<string> {
+  return new Set(
+    (text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length > 2 && !STOPWORDS.has(w)),
+  );
+}
+
+/** Fraction of the claim's content words that appear in the source snippet. */
+function supportScore(claim: string, snippet: string): number {
+  const c = contentTokens(claim);
+  if (!c.size) return 1;
+  const s = contentTokens(snippet);
+  let hit = 0;
+  for (const w of c) if (s.has(w)) hit++;
+  return hit / c.size;
+}
+
+const SUPPORT_THRESHOLD = 0.16;
+
+function bestCitationFor(claim: string, citations: Citation[]): { id: string; score: number } | null {
+  let best: { id: string; score: number } | null = null;
+  for (const c of citations) {
+    const score = supportScore(claim, `${c.title} ${c.snippet}`);
+    if (!best || score > best.score) best = { id: c.id, score };
+  }
+  return best;
+}
+
+export function verifyCitationSupport(draft: MemoDraft): {
+  draft: MemoDraft;
+  dropped: { claim: string; reason: string }[];
+  reattached: number;
+} {
+  const byId = new Map(draft.citations.map((c) => [c.id, c]));
+  const dropped: { claim: string; reason: string }[] = [];
+  let reattached = 0;
+
+  const check = <T extends { title: string; detail: string; citationIds: string[] }>(items: T[]): T[] =>
+    items
+      .map((item) => {
+        const claim = `${item.title}. ${item.detail}`;
+        const supported = item.citationIds.filter((id) => {
+          const c = byId.get(id);
+          return c && supportScore(claim, `${c.title} ${c.snippet}`) >= SUPPORT_THRESHOLD;
+        });
+        if (supported.length) return { ...item, citationIds: supported };
+
+        // Cited source doesn't back the claim — is there one that does?
+        const best = bestCitationFor(claim, draft.citations);
+        if (best && best.score >= SUPPORT_THRESHOLD) {
+          reattached += 1;
+          return { ...item, citationIds: [best.id] };
+        }
+        return { ...item, citationIds: [] };
+      })
+      .filter((item) => {
+        if (item.citationIds.length === 0) {
+          dropped.push({
+            claim: item.title,
+            reason: "No retrieved source supports this claim — removed by the support check.",
+          });
+          return false;
+        }
+        return true;
+      });
+
+  return { draft: { ...draft, risks: check(draft.risks), catalysts: check(draft.catalysts) }, dropped, reattached };
+}
+
 /** Turn a draft + critique into the final, guardrailed, publishable memo. */
 export function applyGuardrails(args: {
   ticker: string;
@@ -114,8 +194,13 @@ export function applyGuardrails(args: {
   const { ticker, question, critique, cost, toolCalls, mode } = args;
   const u = UNIVERSE[ticker.toUpperCase()] ?? { name: `${ticker} Inc.`, sector: "Equity", cik: "" };
 
-  // Hard accuracy gate: strip invented citation ids, drop uncited claims.
-  const { draft, droppedClaims, strippedRefs } = enforceCitationIntegrity(args.draft);
+  // Hard accuracy gates, in order: (1) the citation must exist, (2) it must
+  // actually support the claim.
+  const integrity = enforceCitationIntegrity(args.draft);
+  const support = verifyCitationSupport(integrity.draft);
+  const draft = support.draft;
+  const strippedRefs = integrity.strippedRefs;
+  const droppedClaims = [...integrity.droppedClaims, ...support.dropped];
 
   const thesis = scrubAdvice(draft.thesis).text;
   const confidenceRationale = scrubAdvice(draft.confidenceRationale).text;
