@@ -93,7 +93,25 @@ def stream_memo(api: str, ticker: str, question: str) -> tuple[dict | None, str 
                 memo = event["memo"]
             elif event.get("type") == "error":
                 error = event["message"]
+
+    # When every provider is rate-limited the app degrades to a scripted demo memo.
+    # That is correct product behaviour but INVALID as an eval sample: the demo memo
+    # is deterministic, so scoring it yields a stable, meaningless number. Refuse it
+    # only when the server said it was running live.
+    if EXPECT_LIVE and memo is not None and memo.get("mode") != "live":
+        return None, f"DEGRADED to demo (providers exhausted) — not a valid sample: {(error or '')[:100]}"
     return memo, error
+
+
+EXPECT_LIVE = False
+
+
+def server_mode(api: str) -> str:
+    try:
+        r = requests.get(f"{api}/api/health", timeout=60)
+        return str(r.json().get("mode", "unknown"))
+    except requests.RequestException:
+        return "unknown"
 
 
 def citation_accuracy(memo: dict) -> tuple[int, int, list[str]]:
@@ -156,7 +174,14 @@ def main() -> int:
 
     gs = json.loads((HERE / "golden_set.json").read_text(encoding="utf-8"))
 
-    print(f"\nCandor eval harness → {args.api}\n" + "─" * 60)
+    global EXPECT_LIVE
+    mode = server_mode(args.api)
+    EXPECT_LIVE = mode == "live"
+
+    print(f"\nCandor eval harness → {args.api}  (server mode: {mode})")
+    if EXPECT_LIVE:
+        print("Samples that degrade to the demo fallback will be rejected as invalid.")
+    print("─" * 60)
 
     cite_supported = cite_total = 0
     checklist_pass = checklist_total = 0
