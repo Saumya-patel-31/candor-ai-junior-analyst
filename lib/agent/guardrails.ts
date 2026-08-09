@@ -68,25 +68,13 @@ export function enforceCitationIntegrity(draft: MemoDraft): {
     return kept;
   };
 
-  const risks = draft.risks
-    .map((r) => ({ ...r, citationIds: clean(r.citationIds) }))
-    .filter((r) => {
-      if (r.citationIds.length === 0) {
-        dropped.push({ claim: r.title, reason: "Risk cited no valid source after integrity check — removed." });
-        return false;
-      }
-      return true;
-    });
-
-  const catalysts = draft.catalysts
-    .map((c) => ({ ...c, citationIds: clean(c.citationIds) }))
-    .filter((c) => {
-      if (c.citationIds.length === 0) {
-        dropped.push({ claim: c.title, reason: "Catalyst cited no valid source after integrity check — removed." });
-        return false;
-      }
-      return true;
-    });
+  // Strip invented ids but do NOT drop the claim here. Models routinely invent
+  // ids ("c1") for a claim the evidence genuinely supports; dropping at this
+  // stage produced memos with zero risks. verifyCitationSupport runs next and
+  // re-attaches the claim to a source that actually backs it — only if nothing
+  // supports it does it get removed.
+  const risks = draft.risks.map((r) => ({ ...r, citationIds: clean(r.citationIds) }));
+  const catalysts = draft.catalysts.map((c) => ({ ...c, citationIds: clean(c.citationIds) }));
 
   // Metrics keep their value (they're quantitative and traceable to the evidence
   // bundle) but an invented citationId is cleared rather than shown as real.

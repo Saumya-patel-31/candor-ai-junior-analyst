@@ -46,9 +46,15 @@ function retryDelayMs(res: Response, body: string): number {
   return 8000;
 }
 
-/** A daily/quota exhaustion should switch providers, not sit in a retry loop. */
+/**
+ * Only a DAILY cap means "this provider is done for today" — switch away.
+ * A per-minute cap (TPM/RPM) clears in under a minute, so waiting it out is far
+ * better than burning the next provider's budget. Conflating the two made the
+ * agent abandon a healthy provider after one burst of traffic.
+ */
 function isQuotaExhausted(status: number, body: string): boolean {
   if (status !== 429) return false;
+  if (/per minute|TPM|RPM/i.test(body)) return false;
   return /per day|daily|TPD|RPD|quota|exhausted|insufficient/i.test(body);
 }
 
@@ -103,8 +109,9 @@ async function chatOnProvider(
     if (!retryable || attempt === MAX_ATTEMPTS) break;
 
     const waitMs = res.status === 429 ? retryDelayMs(res, body) + 500 : 1000 * attempt;
-    // Long per-minute waits are also better spent on another provider.
-    if (waitMs > 20_000) throw new QuotaExhausted(lastErr);
+    // Per-minute windows clear in ~60s — wait them out. Anything longer is a
+    // real outage or a daily cap, so hand off to the next provider instead.
+    if (waitMs > 90_000) throw new QuotaExhausted(lastErr);
     console.warn(`[candor] ${res.status} from ${p.label}; retry in ${waitMs}ms (${attempt}/${MAX_ATTEMPTS})`);
     await sleep(waitMs);
   }

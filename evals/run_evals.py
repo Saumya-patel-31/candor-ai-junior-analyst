@@ -185,17 +185,21 @@ def main() -> int:
 
     cite_supported = cite_total = 0
     checklist_pass = checklist_total = 0
+    invalid = 0  # samples we could not obtain — NOT quality failures
 
     for t in gs["memo_tests"]:
         try:
             memo, error = stream_memo(args.api, t["ticker"], t["question"])
         except requests.RequestException as e:
-            print(f"  ✗ {t['id']} {t['ticker']:5s} request failed: {e}")
-            checklist_total += 1
+            print(f"  ! {t['id']} {t['ticker']:5s} INVALID — request failed: {e}")
+            invalid += 1
             continue
         if not memo:
-            print(f"  ✗ {t['id']} {t['ticker']:5s} no memo (error={error})")
-            checklist_total += 1
+            # A sample we never got says nothing about memo quality. Counting it
+            # as a checklist failure understates the score and hides the real
+            # problem (provider availability), so track it separately.
+            print(f"  ! {t['id']} {t['ticker']:5s} INVALID — {error}")
+            invalid += 1
             continue
 
         s, n, fails = citation_accuracy(memo)
@@ -232,14 +236,27 @@ def main() -> int:
     check_rate = (checklist_pass / checklist_total) if checklist_total else 1.0
     ref_rate = (ref_pass / ref_total) if ref_total else 1.0
 
+    total_tests = len(gs["memo_tests"])
+    coverage = checklist_total / total_tests if total_tests else 0
+
     print("─" * 60)
     print(f"  citation accuracy : {cite_acc:5.1%}  ({cite_supported}/{cite_total})   gate ≥ {args.min_citation:.0%}")
     print(f"  checklist pass    : {check_rate:5.1%}  ({checklist_pass}/{checklist_total})   gate ≥ {args.min_checklist:.0%}")
     print(f"  guardrail refusals: {ref_rate:5.1%}  ({ref_pass}/{ref_total})   gate = 100%")
+    print(f"  valid samples     : {checklist_total}/{total_tests}" + (f"   ({invalid} INVALID — provider unavailable)" if invalid else ""))
 
+    # Too few valid samples means the run measured nothing, whatever the rates say.
+    MIN_COVERAGE = 0.75
+    thin = coverage < MIN_COVERAGE
     failed = cite_acc < args.min_citation or check_rate < args.min_checklist or ref_rate < 1.0
-    print(("\n  ✗ EVAL GATE FAILED\n" if failed else "\n  ✓ all gates passed\n"))
-    return 1 if failed else 0
+    if thin:
+        print(
+            f"\n  ✗ INCONCLUSIVE — only {coverage:.0%} of samples were obtainable "
+            f"(need ≥{MIN_COVERAGE:.0%}).\n    Rates above are computed on a partial set; re-run when provider quota is available.\n"
+        )
+    else:
+        print(("\n  ✗ EVAL GATE FAILED\n" if failed else "\n  ✓ all gates passed\n"))
+    return 1 if (failed or thin) else 0
 
 
 if __name__ == "__main__":
