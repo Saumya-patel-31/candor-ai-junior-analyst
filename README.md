@@ -131,14 +131,17 @@ python evals/precompute.py            # one memo per covered ticker, cached
 **2. Provider failover.** Every provider you add a key for becomes an automatic fallback
 when the one above it hits its daily cap. The agent switches mid-run rather than failing:
 
-| Provider | Free daily budget |
-|---|---|
-| Cerebras (recommended primary) | **~1M tokens/day**, no card |
-| Groq | 100k/day on 70B (500k on 8B), fastest |
-| Gemini | ~250 requests/day, plus free embeddings |
+| Provider | Free daily budget | Verified |
+|---|---|---|
+| Groq (default primary) | 100k tokens/day on 70B | ✅ the only free model that reliably holds the forced-JSON contract |
+| Gemini | ~250 requests/day, plus free embeddings | ✅ works; model ids churn |
+| OpenRouter | 50 requests/day | ⚠️ use *instruction-tuned* slugs (`gemma-4-31b-it:free`) — reasoning models return no usable JSON |
+| Cerebras | — | ❌ returns `402 Payment required`; its free tier does not cover inference |
+| Ollama | unlimited, local | ✅ but ~7 min/memo on consumer hardware |
 
-Together that's comfortably over a million tokens a day — and with caching, most requests
-never spend any of it.
+Budgets are real constraints, not footnotes: a memo costs ~5.9k tokens on the reasoning
+tier, so a 12-question eval run needs ~71k of Groq's 100k daily allowance. Caching is what
+keeps ordinary traffic off that budget entirely.
 
 **3. Caps and a kill switch.** Per-IP daily cap, a global cap, a concurrency cooldown, and
 `CANDOR_KILL_SWITCH=true` to stop all model spend instantly. If everything is exhausted the
@@ -186,6 +189,23 @@ python evals/run_evals.py         # in another
 Gates on **citation accuracy ≥ 85%**, **checklist ≥ 80%**, and **100% guardrail refusals**,
 with a non-zero exit for CI. Run it after every prompt/retrieval change. See
 [`evals/README.md`](./evals/README.md).
+
+### Measured results (live mode, Groq llama-3.3-70b)
+
+| Run | Citation accuracy | Checklist | Refusals | Valid samples |
+|---|---|---|---|---|
+| baseline | 75.0% | 41.7% | — | 12/12 |
+| + citation-discipline prompt | 81.8% | 75.0% | — | 12/12 |
+| + support verification, trimmed bundle | **78.0%** | 55.6% | **100%** | 9/12 |
+
+**These are real numbers, including the ones that went down.** The harness refuses to
+score a run where the agent degraded to its demo fallback, and reports `INCONCLUSIVE`
+below 75% sample coverage — an earlier "85.4%" turned out to be the deterministic demo
+memo being graded, which is exactly the failure this project exists to catch.
+
+Current gap to the 85% gate is concentrated in metrics citing the XBRL source; the fix
+(scoring the same text the eval scores, and carrying every fact in the citation snippet)
+is committed but **not yet re-measured** — a full run consumes most of a free daily budget.
 
 ## Project structure
 

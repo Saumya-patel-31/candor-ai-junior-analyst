@@ -171,7 +171,11 @@ export function verifyCitationSupport(draft: MemoDraft): {
   // source that does support it, or cleared rather than shown as provenance.
   const keyMetrics = draft.keyMetrics.map((m) => {
     if (!m.citationId) return m;
-    const claim = `${m.label} ${m.value} ${m.commentary ?? ""}`;
+    // Score on label + commentary only. Including the value ("$20.83B") inflated
+    // the match with numeric text and let metrics through that the citation
+    // doesn't actually describe — the guard must judge the same words a reader
+    // (and the eval) would check.
+    const claim = `${m.label} ${m.commentary ?? ""}`;
     const cited = byId.get(m.citationId);
     if (cited && supportScore(claim, `${cited.title} ${cited.snippet}`) >= SUPPORT_THRESHOLD) return m;
     const best = bestCitationFor(claim, draft.citations);

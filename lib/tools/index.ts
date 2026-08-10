@@ -78,7 +78,11 @@ async function getFundamentals(ticker: string): Promise<ToolResult> {
       .filter(Boolean)
       .join("\n");
 
-    const headline = [...factLines.slice(0, 4), ...ratioLines.slice(0, 2)].join("; ");
+    // Carry EVERY fact and ratio in the citation snippet, not just the headline
+    // four. A memo can cite this source for any figure it reports, so a truncated
+    // snippet made later metrics (R&D, FCF, cash) look unsupported even though the
+    // source contains them. Only the prompt copy is trimmed.
+    const headline = [...factLines, ...ratioLines].join("; ");
     const citations: Citation[] = [
       {
         id: "c_xbrl",
@@ -111,12 +115,16 @@ async function searchFilings(ticker: string, query: string): Promise<ToolResult>
   // hasn't been ingested we return a graceful, honest empty result.
   const { retrieveFilingChunks } = await import("@/lib/data/embeddings");
   try {
-    const chunks = await retrieveFilingChunks(ticker, query, 6);
+    // 4, not 6: chunks come back ranked by cosine similarity, so the tail adds
+    // prompt tokens faster than it adds signal.
+    const chunks = await retrieveFilingChunks(ticker, query, 4);
     const citations: Citation[] = chunks.map((c, i) => ({
       id: `c_fil_${i}`,
       kind: c.form === "10-Q" ? "10-Q" : "10-K",
+      // Keep a generous snippet: it is what support-verification matches against
+      // and what the reader sees. Only the prompt copy is truncated.
+      snippet: c.text.slice(0, 400),
       title: `${ticker} ${c.form} — ${c.item}`,
-      snippet: c.text.slice(0, 260),
       locator: c.item,
       filedAt: c.filedAt,
     }));

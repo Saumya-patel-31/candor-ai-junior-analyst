@@ -4,11 +4,17 @@ import type { ToolResult } from "@/lib/tools";
 import { callJSON, type CallUsage } from "./llm";
 import { SYNTH_SYSTEM } from "./prompts";
 
-/* Token budget. Free tiers are tokens-per-minute capped (Groq: 12k TPM), and
-   filing chunks are long, so the bundle is trimmed to a predictable size rather
-   than blowing the limit and getting throttled mid-memo. ~4 chars ≈ 1 token. */
-const MAX_SUMMARY_CHARS = 2600; // per tool
-const MAX_SNIPPET_CHARS = 320; // per citation
+/* Token budget (~4 chars ≈ 1 token).
+   Measured before trimming: the reasoning tier burned 8.5k tokens/memo, so a
+   12-question eval run needed 103k against a 100k/day free budget — the suite
+   could not physically finish. These limits target ~5k/memo (≈60k per run),
+   leaving headroom for retries.
+
+   This trims only what is SENT to the model. Citation objects retain their full
+   snippets for support verification and for display in the memo, so a smaller
+   prompt costs no grounding accuracy. */
+const MAX_SUMMARY_CHARS = 1250; // per tool, prompt only
+const MAX_SNIPPET_CHARS = 170; // per citation, prompt only
 
 const trim = (s: string, max: number) => (s.length <= max ? s : `${s.slice(0, max).trimEnd()}…`);
 
